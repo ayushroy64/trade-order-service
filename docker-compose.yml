@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: fastapi_user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: trade_orders
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://fastapi_user:password@db/trade_orders
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
