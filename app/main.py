@@ -3,13 +3,12 @@ from pydantic import BaseModel
 from typing import List, Dict
 import json
 import uuid
+import asyncio
 
 app = FastAPI()
 
-# In-memory storage for orders (replace with database in production)
 orders: Dict[str, Dict] = {}
 
-# Pydantic model for order
 class OrderCreate(BaseModel):
     symbol: str
     price: float
@@ -17,12 +16,12 @@ class OrderCreate(BaseModel):
     order_type: str
 
 class OrderStatusUpdate(BaseModel):
-    status: str  # e.g., "pending", "filled", "canceled"
+    status: str
 
 # WebSocket manager to handle connections
 class ConnectionManager:
     def __init__(self):
-        self.active_connections = []
+        self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -33,7 +32,10 @@ class ConnectionManager:
 
     async def broadcast(self, message: str):
         for connection in self.active_connections:
-            await connection.send_text(message)
+            try:
+                await connection.send_text(message)
+            except Exception:
+                self.active_connections.remove(connection)  # Remove disconnected clients
 
 manager = ConnectionManager()
 
@@ -46,23 +48,30 @@ async def create_order(order: OrderCreate):
         "id": order_id,
         "status": "pending"  # Default status
     }
-    await manager.broadcast(json.dumps({
+    
+    # Broadcast new order event
+    asyncio.create_task(manager.broadcast(json.dumps({
         "event": "order_created",
         "order": orders[order_id]
-    }))
+    })))
+    
     return {"message": "Order created successfully", "order_id": order_id}
 
-# PUT /orders/{order_id}/status - Update order status
+# PUT /orders/{order_id}/status - Update order status and notify via WebSocket
 @app.put("/orders/{order_id}/status")
 async def update_order_status(order_id: str, status_update: OrderStatusUpdate):
     if order_id not in orders:
         raise HTTPException(status_code=404, detail="Order not found")
+    
     orders[order_id]["status"] = status_update.status
-    await manager.broadcast(json.dumps({
+
+    # Broadcast order status update
+    asyncio.create_task(manager.broadcast(json.dumps({
         "event": "order_status_updated",
         "order_id": order_id,
         "status": status_update.status
-    }))
+    })))
+
     return {"message": "Order status updated successfully"}
 
 # GET /orders - Retrieve all orders
@@ -97,10 +106,10 @@ async def get():
                 <input type="text" id="messageText" autocomplete="off"/>
                 <button>Send</button>
             </form>
-            <ul id='messages'>
-            </ul>
+            <ul id='messages'></ul>
             <script>
                 var ws = new WebSocket("ws://localhost:8000/ws");
+                
                 ws.onmessage = function(event) {
                     var messages = document.getElementById('messages');
                     var message = document.createElement('li');
@@ -108,6 +117,7 @@ async def get():
                     message.appendChild(content);
                     messages.appendChild(message);
                 };
+
                 function sendMessage(event) {
                     var input = document.getElementById("messageText");
                     ws.send(input.value);
